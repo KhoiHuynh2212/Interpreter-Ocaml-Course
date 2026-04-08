@@ -6,6 +6,56 @@ let trim_crlf str =
   if size > 0 && str.[size - 1] = '\r' then String.sub str 0 (size - 1)
   else str
 
+let is_integer tok =
+  try ignore (int_of_string tok); true
+  with Failure _ -> false 
+
+let is_name w =
+  let n = String.length w in
+  n > 0
+  && (w.[0] = '_' || (w.[0] >= 'a' && w.[0] <= 'z') || (w.[0] >= 'A' && w.[0] <= 'Z'))
+  && String.for_all (fun c ->
+       c = '_'
+       || (c >= 'a' && c <= 'z')
+       || (c >= 'A' && c <= 'Z')
+       || (c >= '0' && c <= '9')
+     ) w 
+
+(* Anything that is not a plain string value *)
+let is_non_string w =
+  is_integer w || is_bool w || w = ":error:" || w = ":unit:"
+
+type env = (string * string) list list 
+
+let empty_env : env = [[]]
+
+(* Look up a name, searching from the innermost scope outward *)
+let rec lookup name = function
+  | []           -> None
+  | scope :: rest ->
+    (match List.assoc_opt name scope with
+     | Some v -> Some v
+     | None   -> lookup name rest)
+
+     
+(* Bind a name in the current (innermost) scope *)
+let bind name value = function
+  | []           -> [(name, value)] :: []   (* should not happen *)
+  | scope :: rest -> ((name, value) :: List.remove_assoc name scope) :: rest 
+
+let push_scope env = [] :: env
+
+let pop_scope = function
+  | []           -> ([], [])
+  | scope :: rest -> (scope, rest)
+ 
+(* Resolve a token: if it is a bound name return its value, else return as-is.
+   Returns None if the name exists but is unbound. *)
+let resolve tok env =
+  if is_name tok then lookup tok env
+  else Some tok
+ 
+
 (* Check whether a string is a valid decimal integer *)
 let looks_like_int word =
   try ignore (int_of_string word); true
@@ -98,6 +148,7 @@ let run_not stack = match stack with
       ":false:" :: tl
     else
       ":true:" :: tl
+
 let run_equal stack = match stack with 
   | []              -> ":error:" :: []
   | head :: []      -> ":error:" :: head :: [] 
@@ -108,6 +159,7 @@ let run_equal stack = match stack with
       ":true:" :: tl 
     else   
       ":false:" :: tl
+
 let run_lessThan stack = match stack with
   | []              -> ":error:" :: []
   | head :: []      -> ":error:" :: head :: []
@@ -117,7 +169,15 @@ let run_lessThan stack = match stack with
     else if int_of_string nxt < int_of_string top then 
       ":true:" :: tl 
     else   
-      ":false:" :: tl
+      ":false:" :: tl 
+
+let run_bind stack = match stack with 
+  | []        -> ":error:" :: [] 
+  | v :: [] -> ":error:" :: v :: []
+  | v :: name :: tl ->    
+    if not(is_name name) then 
+      ":error:" :: v :: name :: []
+    else 
 
 (* Swap the top two elements; push :error: when fewer than two exist *)
 let run_swap stack = match stack with
@@ -205,5 +265,5 @@ let interpreter ((src : string), (dst : string)) : unit =
   let remaining = List.fold_left (run_command write) [] commands in
   List.iter write remaining;
   close_in  in_chan;
-  close_out out_chan
+  close_out out_chan;
 ;;
