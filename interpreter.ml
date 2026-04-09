@@ -10,6 +10,8 @@ let is_integer tok =
   try ignore (int_of_string tok); true
   with Failure _ -> false 
 
+let looks_like_int tok = is_integer tok
+
 let is_name w =
   let n = String.length w in
   n > 0
@@ -56,11 +58,6 @@ let resolve tok env =
   else Some tok
  
 
-(* Check whether a string is a valid decimal integer *)
-let looks_like_int word =
-  try ignore (int_of_string word); true
-  with Failure _ -> false
-
 (* ── Stack operations ───────────────────────────────────────────────────── *)
 
 (* Push a single token onto the stack, handling quoted strings and "-0" *)
@@ -77,6 +74,19 @@ let push_token word stack =
 let drop_top stack = match stack with
   | []           -> ":error:" :: stack
   | _ :: beneath -> beneath
+
+
+let int_binop op guard_zero env stack = match stack with 
+  | []               -> ":error:" :: []
+  | only :: []       -> ":error:" :: only :: []
+  | rhs :: lhs :: tl -> 
+    let lhs' = resolve lhs env in 
+    let rhs' = resolve rhs env in 
+    (match lhs', rhs' with
+    | Some lv, Some rv when is_integer lv && is_integer rv -> 
+      if guard_zero && rv = "0" then ":error:" :: rhs ::lhs :: tl 
+      else string_of_int(op(int_of_string lv ) (int_of_string rv)) :: tl
+    |_ -> ":error:" :: rhs :: lhs :: tl)
 
 (* Generic integer binary operation.
    [div_guard] enables the division-by-zero safety check. *)
@@ -98,86 +108,12 @@ let run_div stack = arith_binop ( / )   true  stack
 let run_rem stack = arith_binop ( mod ) true  stack
 
 (* Negate the top integer; push :error: when empty or non-integer *)
-let run_neg stack = match stack with
+let run_neg env stack = match stack with
   | []              -> ":error:" :: []
   | head :: beneath ->
-    if looks_like_int head then
-      string_of_int (- (int_of_string head)) :: beneath
-    else
-      ":error:" :: head :: beneath 
-
-let run_cat stack = match stack with 
-  | []              -> ":error:" :: []
-  | head :: []      -> ":error:" :: head :: []
-  | top :: next :: tl -> 
-    if looks_like_int top || looks_like_int next 
-       || top = ":true:" || top = ":false:"
-       || next = ":true:" || next = ":false:"
-       || top = ":error:" || next = ":error:"
-       || top = ":unit:"  || next = ":unit:"
-    then ":error:" :: top :: next :: tl
-    else (next ^ top) :: tl 
-
-let run_and stack = match stack with 
-  | []              -> ":error:" :: []
-  | head :: []      -> ":error:" :: head :: [] 
-  | top :: nxt :: tl -> 
-    if not (is_bool top) || not (is_bool nxt) then 
-      ":error:" :: top :: nxt:: tl
-    else if top = ":true:" && nxt = ":true:" then 
-      ":true:" :: tl
-    else    
-      ":false:" :: tl
-
-let run_or stack = match stack with 
-  | []              -> ":error:" :: []
-  | head :: []      -> ":error:" :: head :: [] 
-  | top :: nxt :: tl -> 
-    if not (is_bool top) || not (is_bool nxt) then 
-      ":error:" :: top :: nxt:: tl
-    else if top = ":true:" || nxt = ":true:" then 
-      ":true:" :: tl
-    else    
-      ":false:" :: tl
-
-let run_not stack = match stack with
-  | []              -> ":error:" :: []
-  | head :: tl      ->
-    if not(is_bool head) then ":error:" :: head :: tl
-    else if head = ":true:" then
-      ":false:" :: tl
-    else
-      ":true:" :: tl
-
-let run_equal stack = match stack with 
-  | []              -> ":error:" :: []
-  | head :: []      -> ":error:" :: head :: [] 
-  | top :: nxt :: tl -> 
-    if not (looks_like_int top) || not( looks_like_int nxt) then 
-      ":error:" :: top :: nxt :: tl
-    else if (top = nxt) then 
-      ":true:" :: tl 
-    else   
-      ":false:" :: tl
-
-let run_lessThan stack = match stack with
-  | []              -> ":error:" :: []
-  | head :: []      -> ":error:" :: head :: []
-  | top :: nxt :: tl -> 
-     if not (looks_like_int top) || not( looks_like_int nxt) then 
-      ":error:" :: top :: nxt :: tl 
-    else if int_of_string nxt < int_of_string top then 
-      ":true:" :: tl 
-    else   
-      ":false:" :: tl 
-
-let run_bind stack = match stack with 
-  | []        -> ":error:" :: [] 
-  | v :: [] -> ":error:" :: v :: []
-  | v :: name :: tl ->    
-    if not(is_name name) then 
-      ":error:" :: v :: name :: []
-    else 
+    (match resolve head env with 
+    | Some v when is_integer v -> string_of_int (-(int_of_string v)) :: beneath 
+    | _ -> ":error:" :: head :: beneath) 
 
 (* Swap the top two elements; push :error: when fewer than two exist *)
 let run_swap stack = match stack with
@@ -196,6 +132,90 @@ let run_println write stack = match stack with
   | []              -> ":error:" :: []
   | head :: beneath -> write head; beneath
 
+
+let run_cat stack = match stack with 
+  | []              -> ":error:" :: []
+  | head :: []      -> ":error:" :: head :: []
+  | top :: next :: tl -> 
+    if is_non_string top || is_non_string next then 
+      ":error:" :: top :: next :: tl
+    else 
+      (next ^ top) :: tl 
+
+let run_and env stack = match stack with 
+  | []              -> ":error:" :: []
+  | head :: []      -> ":error:" :: head :: [] 
+  | top :: nxt :: tl -> 
+    let top' = resolve top env in 
+    let nxt' = resolve nxt env in 
+    (match top', nxt' with 
+    | Some tv, Some nv when is_bool tv && is_bool nv -> 
+      (if tv = ":true:" && nv = ":true:" then ":true:" else ":false:") :: tl
+    |_-> ":error:" :: top :: nxt :: tl)
+
+let run_or env stack = match stack with 
+  | []              -> ":error:" :: []
+  | head :: []      -> ":error:" :: head :: [] 
+  | top :: nxt :: tl -> 
+    let top' = resolve top env in 
+    let nxt' = resolve nxt env in 
+    (match top', nxt' with 
+    | Some tv, Some nv when is_bool tv && is_bool nv -> 
+      (if tv = ":true:" || nv = ":true:" then ":true:" else ":false:") :: tl
+    |_-> ":error:" :: top :: nxt :: tl)
+
+let run_not env stack = match stack with
+  | []              -> ":error:" :: []
+  | top :: tl      ->
+    (match resolve top env with 
+    | Some v when is_bool v -> 
+      (if v = ":true:" then ":false:" else ":true:") :: tl
+    | _ -> ":error:" :: top :: tl) 
+let run_equal env stack = match stack with 
+  | []              -> ":error:" :: []
+  | head :: []      -> ":error:" :: head :: [] 
+  | top :: nxt :: tl -> 
+    let top' = resolve top env in 
+    let nxt' = resolve nxt env in  
+    (match top', nxt' with 
+    | Some tv, Some nv when is_integer tv && is_integer nv -> (if tv = nv then ":true:" else ":false:") :: tl
+    |_  -> ":error:" :: top :: nxt :: tl)
+
+let run_lessThan env stack = match stack with
+  | []              -> ":error:" :: []
+  | head :: []      -> ":error:" :: head :: []
+  | top :: nxt :: tl -> 
+    let top' = resolve top env in 
+    let nxt' = resolve nxt env in  
+    (match top', nxt' with 
+    | Some tv, Some nv when is_integer tv && is_integer nv -> (if int_of_string nv < int_of_string tv then ":true:" else ":false:") :: tl
+    |_ -> ":error:" :: top :: nxt :: tl)
+
+(* Bind: pop value then name, store in env, push :unit: *)
+let run_bind env stack = match stack with 
+  | []        -> (":error:" :: [], env)
+  | v :: [] -> (":error:" :: v :: [], env)
+  | v :: name :: tl ->    
+    if not(is_name name) then 
+      (":error:" :: v :: name :: tl, env)
+    else 
+      let resolved = if is_name v then lookup v env else Some v in 
+      (match resolved with 
+      | None -> (":error:" :: v :: name :: tl, env)
+      | Some actual -> 
+        if actual = ":error:" then 
+          (":error:" :: v :: name :: tl, env)
+        else  
+          (":unit:" :: tl, bind name actual env))
+
+let run_if stack = match stack with
+  | []                    -> ":error:" :: []
+  | x :: []               -> ":error:" :: x :: []
+  | x :: y :: []          -> ":error:" :: x :: y :: []
+  | x :: y :: z :: tl     ->
+    if not (is_bool z) then ":error:" :: x :: y :: z :: tl
+    else if z = ":true:"  then x :: tl
+    else y :: tl
 (* ── IO helpers ─────────────────────────────────────────────────────────── *)
 
 (* Collect every line from [chan] into a list *)
@@ -229,41 +249,49 @@ let quoted_push_arg raw_line =
 (* ── Dispatcher ─────────────────────────────────────────────────────────── *)
 
 (* Process one program line against [stack]; [write] is the output sink *)
-let run_command write stack raw_line =
+let run_command write env stack raw_line =
   match quoted_push_arg raw_line with
-  | Some contents -> contents :: stack
+  | Some contents -> (contents :: stack, env)
   | None ->
     let parts = String.split_on_char ' ' (String.trim raw_line) in
     (match parts with
-    | "push"     :: word :: _ -> push_token word stack
-    | "push"     :: []        -> stack
-    | "pop"      :: _         -> drop_top stack
-    | "add"      :: _         -> run_add stack
-    | "sub"      :: _         -> run_sub stack
-    | "mul"      :: _         -> run_mul stack
-    | "div"      :: _         -> run_div stack
-    | "rem"      :: _         -> run_rem stack
-    | "neg"      :: _         -> run_neg stack
-    | "cat"      :: _         -> run_cat stack
-    | "and"      :: _         -> run_and stack 
-    | "or"       :: _         -> run_or stack 
-    | "not"      :: _         -> run_not stack
-    | "equal"    :: _         -> run_equal stack
-    | "swap"     :: _         -> run_swap stack
-    | "toString" :: _         -> run_to_string stack
-    | "println"  :: _         -> run_println write stack
-    | "quit"     :: _         -> stack
-    | _                       -> stack)
+    | "push"     :: word :: _ -> (push_token word stack, env)
+    | "push"     :: []        -> (stack, env)
+    | "pop"      :: _         -> (drop_top stack, env)
+    | "add"      :: _         -> (run_add stack, env)
+    | "sub"      :: _         -> (run_sub stack, env)
+    | "mul"      :: _         -> (run_mul stack, env)
+    | "div"      :: _         -> (run_div stack, env)
+    | "rem"      :: _         -> (run_rem stack, env)
+    | "neg"      :: _         -> (run_neg env stack, env)
+    | "cat"      :: _         -> (run_cat stack, env)
+    | "and"      :: _         -> (run_and env stack, env)
+    | "or"       :: _         -> (run_or env stack, env)
+    | "not"      :: _         -> (run_not env stack, env)
+    | "equal"    :: _         -> (run_equal env stack, env)
+    | "lessThan" :: _         -> (run_lessThan env stack, env)
+    | "blind"    :: _         -> run_bind env stack
+    | "if"       :: _         -> (run_if stack, env)
+    | "swap"     :: _         -> (run_swap stack, env)
+    | "toString" :: _         -> (run_to_string stack, env)
+    | "println"  :: _         -> 
+      (match stack with 
+      | []        -> (":error:" :: [], env)
+      | top :: tl -> write top; (tl, env))
+    | "quit"     :: _         -> (stack, env)
+    | _                       -> (stack, env))
 
 (* ── Entry point ────────────────────────────────────────────────────────── *)
 
 let interpreter ((src : string), (dst : string)) : unit =
-  let in_chan   = open_in  src in
-  let out_chan  = open_out dst in
-  let write ln  = Printf.fprintf out_chan "%s\n" ln in
-  let commands  = load_lines in_chan in
-  let remaining = List.fold_left (run_command write) [] commands in
-  List.iter write remaining;
+  let in_chan  = open_in  src in
+  let out_chan = open_out dst in
+  let write ln = Printf.fprintf out_chan "%s\n" ln in
+  let program  = load_lines in_chan in
+  let (final_stack, _) =
+    List.fold_left (fun (stk, e) line -> run_command write e stk line) ([], empty_env) program
+  in
+  List.iter write final_stack;
   close_in  in_chan;
-  close_out out_chan;
+  close_out out_chan
 ;;
