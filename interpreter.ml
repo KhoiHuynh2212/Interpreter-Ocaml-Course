@@ -1,6 +1,22 @@
+
+(*Reserve keyword*)
+let keyword_list = [
+  "push"; "pop"; "add"; "sub"; "mul"; "div"; "rem"; "neg"; "swap";
+  "cat"; "and"; "or"; "not"; "equal"; "lessThan"; "bind"; "if";
+  "let"; "end"; "quit"; "toString"; "println"; 
+  "fun"; "funEnd"; "call"; "return"; "inOutFun"
+]
+
+(* Create a hash table sized appropriately for our keyword list *)
+let reserved_keywords = Hashtbl.create (List.length keyword_list) 
+
+(* Populate the hash table (we map the string to unit () since we just need to check existence) *)
+let () = List.iter (fun kw -> Hashtbl.add reserved_keywords kw ()) keyword_list
+
+(* Helper function to check if a string is a reserved keyword *)
+let is_keyword w = Hashtbl.mem reserved_keywords w
+
 (* Value type*)
-
-
 type value =
 
   | VInt  of int
@@ -13,9 +29,11 @@ type value =
 
   | VUnit
 
-  | VError
+  | VError 
 
+  | VClosure of env * string * string list
 
+and env = (string * value) list list   (* stack of scopes, innermost first *)
 let show = function
 
   | VInt  n -> string_of_int n
@@ -30,7 +48,7 @@ let show = function
 
   | VError  -> ":error:"
 
-
+  | VClosure _ -> ":fun:"
 
 (* Utilities*)
 
@@ -88,12 +106,7 @@ let parse_value tok =
 
 (* Environment*)
 
-
-type env = (string * value) list list   (* stack of scopes, innermost first *)
-
-
 let empty_env : env = [[]]
-
 
 let rec lookup name = function
 
@@ -134,9 +147,7 @@ let resolve_or_error v env =
   match resolve v env with Some r -> r | None -> VError
 
 
-
 (* Stack helpers  *)
-
 
 type stack = value list
 
@@ -286,7 +297,6 @@ let run_lessThan env = function
 
 (* String ops *)
 
-
 let run_cat env = function
 
   | []               -> VError :: []
@@ -304,14 +314,11 @@ let run_cat env = function
 
 
 (* bind *)
-
-
 let is_bindable = function
 
   | VInt _ | VBool _ | VStr _ | VUnit -> true
 
   | _ -> false
-
 
 let run_bind env = function
 
@@ -355,8 +362,6 @@ let run_bind env = function
 
 
 (* if *)
-
-
 let run_if env = function
 
   | []                    -> VError :: []
@@ -378,8 +383,6 @@ let run_if env = function
 
 
 (* ── toString / println *)
-
-
 let run_toString _env = function
 
   | []          -> VError :: []
@@ -412,8 +415,6 @@ let run_println write env stack =
 
 
 (* ── IO helpers  *)
-
-
 let load_lines chan =
 
   let rec go acc =
@@ -459,8 +460,6 @@ let quoted_push_string raw =
 
   else None
 
-
-
 (* Index-based scan helpers *)
 
 
@@ -486,7 +485,17 @@ let find_matching_end lines i =
 
   !j
 
-
+(* Scans forward to find the matching "funEnd" and extracts the code body *)
+let extract_fun_body lines start_idx =
+  let n = Array.length lines in
+  let j = ref start_idx in
+  let body = ref [] in
+  while !j < n && String.trim lines.(!j) <> "funEnd" do
+    body := lines.(!j) :: !body;
+    incr j
+  done;
+  (* Return the code lines in the correct order, and the index of funEnd *)
+  (List.rev !body, !j)
 
 (* ── Main execution loop *)
 
@@ -505,6 +514,29 @@ let rec exec lines i env stack write =
     if trimmed = "quit" then (stack, env, i+1)
 
     else if trimmed = "end" then (stack, env, i+1)
+
+    (* NEW: Function Declarations *)
+    else if String.length trimmed >= 3 && String.sub trimmed 0 3 = "fun" then begin
+      (* 1. Split the line to get: ["fun"; "functionName"; "parameterName"] *)
+      let parts = String.split_on_char ' ' trimmed |> List.filter (fun s -> s <> "") in
+      match parts with
+      | ["fun"; fun_name; param_name] ->
+          (* 2. Scoop up the code body starting from the next line *)
+          let (body_lines, funEnd_idx) = extract_fun_body lines (i+1) in
+          
+          (* 3. Create the closure snapshot *)
+          let closure_val = VClosure (env, param_name, body_lines) in
+          
+          (* 4. Bind the closure to the function name in the CURRENT scope *)
+          let updated_env = bind_in_env fun_name closure_val env in
+          
+          (* 5. Push :unit: to the stack and resume execution AFTER the funEnd *)
+          exec lines (funEnd_idx + 1) updated_env (VUnit :: stack) write
+          
+      | _ -> 
+          (* Malformed fun command *)
+          exec lines (i+1) env (VError :: stack) write
+    end  
 
     else if trimmed = "let" then begin
 
@@ -602,7 +634,6 @@ and dispatch raw env stack write =
 
 
 (* ── Entry point *)
-
 
 let interpreter ((src : string), (dst : string)) : unit =
 
