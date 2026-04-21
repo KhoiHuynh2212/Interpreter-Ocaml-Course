@@ -1,12 +1,13 @@
-push 5
-push :true:
-push :false:
-push "str1"
-push str1
-push :error:
-push :unit:
-toString
-println
+push 305
+push 305
+push a
+push 7
+push 9
+equal
+push 10
+push 17
+lessThan
+push 305
 toString
 println
 toString

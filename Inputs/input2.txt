@@ -1,12 +1,11 @@
+push :true:
+push :true:
+push 3
+and
+push 5
 push 10
-neg
-neg
-push :false:
-neg
 add
-push -0
-neg
-push -0
+push :true:
 toString
 println
 toString
