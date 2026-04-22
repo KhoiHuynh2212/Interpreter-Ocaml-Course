@@ -1,19 +1,21 @@
-push coolname
-push coolname
-push a
+push x
+push 3
+bind
+fun addX arg
+push x
+push arg
+add
+return
+funEnd
+push x
 push 5
 bind
-push b
-push 10
-bind
 push a
-push b
-add
 push 3
-div
-push coolername
-toString
-println
+bind
+push addX
+push a
+call
 toString
 println
 toString

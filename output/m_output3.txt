@@ -1,7 +1,4 @@
-num4
-num3
+0
 :unit:
 :unit:
-x
 :unit:
-:error:
